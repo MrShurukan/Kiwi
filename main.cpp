@@ -16,7 +16,36 @@ sf::Font mainFont;
 int mouseX, mouseY;
 int width, height;
 
-int otherX = -1, otherY = -1;
+#define NoteNumber 12
+
+// Сразу скроллим piano roll на две октавы наверх
+int verticalOffset = NoteNumber * 2;
+
+// Позиция вертикального ползунка
+int verticalScrollY = -1;
+#define VerticalScrollWidth 20
+#define VerticalScrollHeight 60
+
+// Позиция горизонтального ползунка
+int horizontalScrollX = -1;
+
+// Выбрал ли пользователь представление через диезы?
+bool isSharpsSelected = false;
+
+std::string notes_sharps[NoteNumber] = {
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+};
+std::string notes_flats[NoteNumber] = {
+    "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"
+};
+
+// Размер символов слева в пикселях
+const int charSize = 24;
+
+// Разметка одного диапазона значений на другой
+double mapRanges(double value, double input_start, double input_end, double output_start, double output_end) {
+    return (value - input_start) * (output_end - output_start) / (input_end - input_start) + output_start;
+}
 
 void draw(sf::RenderWindow* window) {
     // Помечаем окно активным в этом потоке
@@ -24,36 +53,64 @@ void draw(sf::RenderWindow* window) {
 
     while (window->isOpen())
     {
-        // clear the window with black color
-        window->clear(sf::Color::White);
+        // Заполняем всё окно серым цветом
+        window->clear(sf::Color(100, 100, 100));
 
-        // draw everything here...
-        // window.draw(...);
-        sf::Text text;
-        text.setFont(mainFont);
-        text.setString("Hello World!");
-        text.setCharacterSize(24);
-        text.setFillColor(sf::Color::Red);
-        text.setStyle(sf::Text::Bold | sf::Text::Italic);
-        text.setOrigin(text.getLocalBounds().width / 2, text.getLocalBounds().height / 2);
-        text.setPosition(sf::Vector2f(width / 2.0, height / 2.0));
+        sf::Text noteLabel;
+        noteLabel.setFont(mainFont);
+        noteLabel.setOutlineColor(sf::Color::Black);
+        noteLabel.setOutlineThickness(1);
+        noteLabel.setCharacterSize(charSize);
 
-        window->draw(text);
+        sf::RectangleShape horizontalLine(sf::Vector2f(width - VerticalScrollWidth, 1));
+        horizontalLine.setFillColor(sf::Color(50, 50, 50));
 
-        sf::CircleShape shape(50.0);
-        shape.setFillColor(sf::Color(200, 100, 100));
-        shape.setOrigin(shape.getRadius(), shape.getRadius());
-        shape.setPosition(mouseX, mouseY);
-        shape.setPointCount(100);
-        window->draw(shape);
+        // Учитываем пробел в два пикселя
+        int labelN = (height / (charSize + 2));
+            
+        std::string* notes_array = (isSharpsSelected ? notes_sharps : notes_flats);
 
-        if (otherX != -1 && otherY != -1) {
-            shape.setFillColor(sf::Color(100, 200, 100));
-            shape.setPosition(otherX, otherY);
-            window->draw(shape);
+        for (int i = 0; i < labelN; i++) {
+            int noteIndex = i + verticalOffset;
+
+            // Пишем название ноты и соответсвующую октаву
+            noteLabel.setString(notes_array[noteIndex % NoteNumber] + std::to_string(noteIndex/NoteNumber));
+            noteLabel.setPosition(0, height - (i+2) * (charSize + 2));
+            window->draw(noteLabel);
+
+            horizontalLine.setPosition(0, height - (i+2) * (charSize + 2));
+            window->draw(horizontalLine);
         }
 
-        // end the current frame
+        sf::RectangleShape verticalLine(sf::Vector2f(2, height - (charSize + 2)));
+        verticalLine.setPosition(2*charSize, 0);
+        window->draw(verticalLine);
+
+        // Вертикальный скролл
+        verticalLine.setSize(sf::Vector2f(2, height));
+        verticalLine.setPosition(width - VerticalScrollWidth, 0);
+        window->draw(verticalLine);
+
+        sf::RectangleShape scrollHandle(sf::Vector2f(VerticalScrollWidth, VerticalScrollHeight));
+        verticalScrollY = mapRanges(verticalOffset, 0, NoteNumber * 10 - labelN, height - VerticalScrollHeight, 0);
+        scrollHandle.setPosition(width - VerticalScrollWidth, verticalScrollY);
+
+        window->draw(scrollHandle);
+
+        // Горизонтальный скролл
+        horizontalLine.setFillColor(sf::Color(255, 255, 255));
+        horizontalLine.setSize(sf::Vector2f(horizontalLine.getSize().x, 2));
+        horizontalLine.setPosition(0, height - (charSize + 2));
+        
+        window->draw(horizontalLine);
+
+        // Реверсим размер вертикальной ручки
+        scrollHandle.setSize(sf::Vector2f(VerticalScrollHeight, charSize+2));
+        // horizontalScrollX = 0;
+        scrollHandle.setPosition(horizontalScrollX, height - scrollHandle.getSize().y);
+        window->draw(scrollHandle);
+
+        // Конец кадра
         window->display();
     }
 }
@@ -65,43 +122,24 @@ void loadSound(sf::SoundBuffer& bf, std::string path) {
     }
 }
 
-int main()
-{
+int main() {
     D(std::cout << "Kiwi v0.1 (c) IZ\n");
-    
-    /* Подгрузка звуковых файлов */
-    sf::SoundBuffer boomp_buffer;
-    sf::Sound boomp;
-    sf::SoundBuffer yi_buffer;
-    sf::Sound yi;
 
     if (!mainFont.loadFromFile("BalooBhaina2-Regular.ttf")) {
         D(std::cout << "Couldn't load font\n");
         exit(1);
     }
-
-    loadSound(boomp_buffer, "boomp.wav");
-    loadSound(yi_buffer, "yi.wav");
-
-    boomp.setBuffer(boomp_buffer);
-    yi.setBuffer(yi_buffer);
-
-    /* Настройка сети */
-    sf::TcpSocket socket;
-    if (socket.connect("localhost", 25565) != sf::Socket::Done) {
-        D(std::cout << "Failed to connect\n");
-        exit(1);
-    }
     
-    width = 800;
-    height = 800;
+    width = 1600;
+    height = 773;
 
     // Устанавливаем 8-ой уровень сглаживания
     sf::ContextSettings settings;
     settings.antialiasingLevel = 8;
 
-    // Create a window with the same pixel depth as the desktop
+    // Создаём окно с такой же глубиной пикселей, как и текущие настройки монитора
     sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
+    // Запрещаем изменение размера окна
     sf::RenderWindow window(sf::VideoMode(width, height, desktop.bitsPerPixel), "Kiwi", sf::Style::Titlebar | sf::Style::Close, settings);
     window.setVerticalSyncEnabled(true);
     window.setKeyRepeatEnabled(false);
@@ -112,48 +150,15 @@ int main()
     // Отрисовка на другом потоке
     std::thread drawingThread(draw, &window);
 
-    std::atomic<bool> finishThreads = false;
-    // Обработка сети на другом потоке
-    std::thread networkThread([&yi, &boomp, &finishThreads](sf::TcpSocket* socket) {
-        sf::SocketSelector selector;
-        selector.add(*socket);
-        while (!finishThreads) {
-            if (selector.wait(sf::milliseconds(100))) {
-                sf::Packet packet;
-                if (socket->receive(packet) != sf::Socket::Done) {
-                    D(std::cout << "Error while receving or a timeout\n");
-                }
-                else {
-                    std::string msg;
-                    packet >> msg;
-
-                    D(std::cout << "Received: " << msg << '\n');
-
-                    if (msg == "y") {
-                        yi.play();
-                    }
-                    else if (msg == "b") {
-                        boomp.play();
-                    }
-                    else if (msg == "coords") {
-                        packet >> otherX >> otherY;
-                    }
-                }
-            }
-        }
-    }, &socket);
-
-    // run the program as long as the window is open
+    // Пока окно открыто - работает основной поток
     while (window.isOpen())
     {
-        // check all the window's events that were triggered since the last iteration of the loop
+        // Проверяем все ивенты с последней итерации цикла
         sf::Event event;
         while (window.pollEvent(event))
         {
             switch (event.type) {
-            case sf::Event::Closed: {
-                sf::Packet packet; packet << "disconnect";
-                socket.send(packet);
+            case sf::Event::Closed: { 
                 window.close();
                 break;
             }
@@ -181,54 +186,60 @@ int main()
                       std::cout << "shift:" << event.key.shift << std::endl;
                       std::cout << "system:" << event.key.system << std::endl);
                     break;
-                    
-                case sf::Keyboard::S: {
-                    D(std::cout << "YI\n");
-                    yi.play();
-
-                    sf::Packet packet;
-                    packet << "y";
-
-                    socket.send(packet);
-                    break;
-                }
-
-                case sf::Keyboard::B: {
-                    D(std::cout << "BOOMP\n");
-                    boomp.play();
-
-                    sf::Packet packet;
-                    packet << "b";
-
-                    socket.send(packet);
-                    break;
-                }
-
+                               
                 }
                 break;
 
             case sf::Event::MouseButtonPressed:
-                if (event.mouseButton.button == sf::Mouse::Right)
+                if (event.mouseButton.button == sf::Mouse::Left)
                 {
                     D(
-                        std::cout << "the right button was pressed" << std::endl;
-                        std::cout << "mouse x: " << event.mouseButton.x << std::endl;
-                        std::cout << "mouse y: " << event.mouseButton.y << std::endl;
+                        std::cout << "the left button was pressed" << std::endl;
+                        /*std::cout << "mouse x: " << event.mouseButton.x << std::endl;
+                        std::cout << "mouse y: " << event.mouseButton.y << std::endl;*/
                     )
+
+                    // Количество подписей нот на экране
+                    int labelsOnScreen = (height / (charSize + 2)) + 1;
+                    // Какую ноту относительно низа экрана мы нажимаем?
+                    int clickedIndex = (height - event.mouseButton.y) / (charSize + 2) - 1;
+                    if (clickedIndex >= 0) {
+                        int ablsoluteIndex = clickedIndex + verticalOffset;
+                        // Какая это нота?
+                        D(std::cout << notes_flats[ablsoluteIndex % NoteNumber] << ablsoluteIndex / NoteNumber << '\n');
+                    }
                 }
                 break;
 
-            case sf::Event::MouseMoved: {
+            case sf::Event::MouseMoved:
                 mouseX = event.mouseMove.x;
                 mouseY = event.mouseMove.y;
                 // D(std::cout << mouseX << " " << mouseY << '\n');
 
-                sf::Packet packet;
-                packet << "coords" << mouseX << mouseY;
-                socket.send(packet);
-
                 break;
-            }
+
+            case sf::Event::MouseWheelScrolled:
+                if (event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
+                    /*D(std::cout << "Scrolling vertically: ");
+                    D(std::cout << "Delta: " << event.mouseWheelScroll.delta << '\n');*/
+
+                    if (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl)) {
+                        horizontalScrollX += event.mouseWheelScroll.delta;
+
+                        if (horizontalScrollX < 0) horizontalScrollX = 0;
+                        if (horizontalScrollX > width) horizontalScrollX = width;
+                    }
+                    else {
+                        verticalOffset += event.mouseWheelScroll.delta;
+
+                        if (verticalOffset < 0) verticalOffset = 0;
+                        // Учитываем пробел в два пикселя
+                        int labelN = (height / (charSize + 2)) + 1;
+                        // D(std::cout << labelN << '\n');
+                        if (verticalOffset + labelN > NoteNumber * 10) verticalOffset = NoteNumber * 10 - labelN;
+                    }
+                }
+                break;
 
             default:
                 break;
@@ -242,8 +253,6 @@ int main()
 
     // Убеждаемся, что поток отрисовки тоже завершился перед завершением программы
     drawingThread.join();
-    finishThreads = true;
-    networkThread.join();
 
     return 0;
 }
