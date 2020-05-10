@@ -1,8 +1,12 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Audio.hpp>
 #include <SFML/Network.hpp>
+#include <math.h>
 #include <thread>
 #include <atomic>
+#include <chrono>
+
+using namespace std::chrono_literals;
 
 #ifdef DEBUG
 #include <iostream>
@@ -11,26 +15,39 @@
 #define D(x) ;
 #endif
 
+bool programIsShuttingDown = false;
+
 sf::Font mainFont;
 
 int mouseX, mouseY;
 int width, height;
 
+const double twelvesRootOf2 = std::pow(2, 1.0 / 12);
+
+bool mouseIsPressed = false;
+bool pMouseIsPressed = false;
+
 #define NoteNumber 12
 
-// Сразу скроллим piano roll на две октавы наверх
-int verticalOffset = NoteNumber * 2;
+// Как много мы проскролили наверх (в нотах)
+int verticalOffset = NoteNumber * 2; // Сразу скроллим piano roll на две октавы наверх
+// Как много мы проскролили вправо
+int horizontalOffset = 0;
+
 
 // Позиция вертикального ползунка
 int verticalScrollY = -1;
 #define VerticalScrollWidth 20
 #define VerticalScrollHeight 60
 
+#define HorizontalScrollWidth VerticalScrollHeight
+// #define HorizontalScrollHeight VerticalScrollWidth
+
 // Позиция горизонтального ползунка
 int horizontalScrollX = -1;
 
 // Выбрал ли пользователь представление через диезы?
-bool isSharpsSelected = false;
+bool isSharpsSelected = true;
 
 std::string notes_sharps[NoteNumber] = {
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
@@ -39,12 +56,34 @@ std::string notes_flats[NoteNumber] = {
     "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"
 };
 
+// Поставлена ли нота в этом месте сетки?
+// 10 октав
+bool isNoteSet[NoteNumber * 10][32];
+
 // Размер символов слева в пикселях
 const int charSize = 24;
+
+// Длина одной ноты в пикселях
+int noteWidth = 70;
 
 // Разметка одного диапазона значений на другой
 double mapRanges(double value, double input_start, double input_end, double output_start, double output_end) {
     return (value - input_start) * (output_end - output_start) / (input_end - input_start) + output_start;
+}
+
+std::vector<std::thread*> soundThreads;
+
+void createSound(sf::SoundBuffer* buffer, double pitch = 1) {
+    std::thread* soundThread = new std::thread([buffer, pitch]() {
+        sf::Sound* sound = new sf::Sound(*buffer);
+        sound->setPitch(pitch);
+
+        sound->play();
+        while (sound->getStatus() == sf::Sound::Playing);
+        delete sound;
+    });
+
+    soundThreads.push_back(soundThread);
 }
 
 void draw(sf::RenderWindow* window) {
@@ -58,41 +97,89 @@ void draw(sf::RenderWindow* window) {
 
         sf::Text noteLabel;
         noteLabel.setFont(mainFont);
-        noteLabel.setOutlineColor(sf::Color::Black);
-        noteLabel.setOutlineThickness(1);
+        //noteLabel.setOutlineColor(sf::Color::Black);
+        //noteLabel.setOutlineThickness(1);
         noteLabel.setCharacterSize(charSize);
 
         sf::RectangleShape horizontalLine(sf::Vector2f(width - VerticalScrollWidth, 1));
         horizontalLine.setFillColor(sf::Color(50, 50, 50));
 
         // Учитываем пробел в два пикселя
-        int labelN = (height / (charSize + 2));
-            
+        int labelAmount = (height / (charSize + 2));
+        int notesOnScreenHor = (width - (2 * charSize)) / noteWidth;
         std::string* notes_array = (isSharpsSelected ? notes_sharps : notes_flats);
 
-        for (int i = 0; i < labelN; i++) {
+        sf::RectangleShape noteColoring(sf::Vector2f(2*charSize, charSize));
+        sf::RectangleShape cellFilling(sf::Vector2f(noteWidth, charSize + 2));
+        cellFilling.setFillColor(sf::Color(100, 200, 100));
+            
+        for (int i = 0; i < labelAmount; i++) {
             int noteIndex = i + verticalOffset;
 
+            // Закрашиваем квадраты черным или белым
+            int arrayIndex = noteIndex % NoteNumber;
+            if (notes_array[arrayIndex].find("#") != -1 || notes_array[arrayIndex].find("b") != -1) {
+                noteColoring.setFillColor(sf::Color::Black);
+                noteColoring.setSize(sf::Vector2f(2 * charSize, charSize / 1.5));
+                noteLabel.setFillColor(sf::Color::White);
+            }
+            else {
+                noteColoring.setFillColor(sf::Color::White);
+                noteColoring.setSize(sf::Vector2f(2 * charSize, charSize));
+                noteLabel.setFillColor(sf::Color::Black);
+            }
+            int vertPos = height - (i + 2) * (charSize + 2);
+            noteColoring.setPosition(0, vertPos);
+            window->draw(noteColoring);
+
             // Пишем название ноты и соответсвующую октаву
-            noteLabel.setString(notes_array[noteIndex % NoteNumber] + std::to_string(noteIndex/NoteNumber));
-            noteLabel.setPosition(0, height - (i+2) * (charSize + 2));
+            noteLabel.setString(notes_array[arrayIndex] + std::to_string(noteIndex/NoteNumber));
+            noteLabel.setPosition(0, height - (i+2) * (charSize + 2) - 5);
             window->draw(noteLabel);
+
+            // Рисуем все видимые ноты на этой строчке
+            for (int i = 0 + horizontalOffset; i < notesOnScreenHor + horizontalOffset; i++) {
+                if (isNoteSet[noteIndex][i]) {
+                    cellFilling.setPosition(noteWidth * (i - horizontalOffset) + (2 * charSize), vertPos);
+                    window->draw(cellFilling);
+                }
+            }
 
             horizontalLine.setPosition(0, height - (i+2) * (charSize + 2));
             window->draw(horizontalLine);
         }
 
+        // Вертикальная черта слева
         sf::RectangleShape verticalLine(sf::Vector2f(2, height - (charSize + 2)));
         verticalLine.setPosition(2*charSize, 0);
         window->draw(verticalLine);
 
+        // Сетка для нот
+        verticalLine.setSize(sf::Vector2f(1, height - (charSize + 2)));
+        verticalLine.setFillColor(sf::Color::Black);
+        for (int i = 1 + horizontalOffset; i < notesOnScreenHor + horizontalOffset; i++) {
+            verticalLine.setPosition(sf::Vector2f(noteWidth * (i - horizontalOffset) + (2 * charSize), 0));
+
+            if (i % 4 == 0) verticalLine.setSize(sf::Vector2f(2, height - (charSize + 2)));
+            else verticalLine.setSize(sf::Vector2f(1, height - (charSize + 2)));
+
+            window->draw(verticalLine);
+        }
+
+        // Закрашиваем место под вертикальный скролл
+        verticalLine.setFillColor(sf::Color(100, 100, 100));
+        verticalLine.setPosition(width - VerticalScrollWidth, 0);
+        verticalLine.setSize(sf::Vector2f(VerticalScrollWidth, height));
+        window->draw(verticalLine);
+
         // Вертикальный скролл
         verticalLine.setSize(sf::Vector2f(2, height));
-        verticalLine.setPosition(width - VerticalScrollWidth, 0);
+        verticalLine.setFillColor(sf::Color::White);
+        // verticalLine.setPosition(width - VerticalScrollWidth, 0);
         window->draw(verticalLine);
 
         sf::RectangleShape scrollHandle(sf::Vector2f(VerticalScrollWidth, VerticalScrollHeight));
-        verticalScrollY = mapRanges(verticalOffset, 0, NoteNumber * 10 - labelN, height - VerticalScrollHeight, 0);
+        verticalScrollY = mapRanges(verticalOffset, 0, NoteNumber * 10 - labelAmount - 1, height - VerticalScrollHeight, 0);
         scrollHandle.setPosition(width - VerticalScrollWidth, verticalScrollY);
 
         window->draw(scrollHandle);
@@ -105,8 +192,9 @@ void draw(sf::RenderWindow* window) {
         window->draw(horizontalLine);
 
         // Реверсим размер вертикальной ручки
-        scrollHandle.setSize(sf::Vector2f(VerticalScrollHeight, charSize+2));
-        // horizontalScrollX = 0;
+        scrollHandle.setSize(sf::Vector2f(HorizontalScrollWidth, charSize+2));
+        // До 8 тактов на экране
+        horizontalScrollX = mapRanges(horizontalOffset, 0, 32 - notesOnScreenHor, 0, width - HorizontalScrollWidth);
         scrollHandle.setPosition(horizontalScrollX, height - scrollHandle.getSize().y);
         window->draw(scrollHandle);
 
@@ -124,6 +212,20 @@ void loadSound(sf::SoundBuffer& bf, std::string path) {
 
 int main() {
     D(std::cout << "Kiwi v0.1 (c) IZ\n");
+
+    // На отдельном потоке обрабатываем активные звуки
+    std::thread soundManagmentThread([] {
+        while (!programIsShuttingDown) {
+            for (int i = soundThreads.size() - 1; i >= 0; i--) {
+                soundThreads[i]->join();
+                delete soundThreads[i];
+                soundThreads.erase(soundThreads.begin() + i);
+            }
+        }
+    });
+    
+    sf::SoundBuffer pianoBuffer; pianoBuffer.loadFromFile("piano_c4.wav");
+    sf::Sound previewSound(pianoBuffer);
 
     if (!mainFont.loadFromFile("BalooBhaina2-Regular.ttf")) {
         D(std::cout << "Couldn't load font\n");
@@ -149,6 +251,9 @@ int main() {
     
     // Отрисовка на другом потоке
     std::thread drawingThread(draw, &window);
+
+    // Для изменения курсора
+    // sf::Cursor cursor;
 
     // Пока окно открыто - работает основной поток
     while (window.isOpen())
@@ -186,7 +291,17 @@ int main() {
                       std::cout << "shift:" << event.key.shift << std::endl;
                       std::cout << "system:" << event.key.system << std::endl);
                     break;
-                               
+                
+                case sf::Keyboard::R:
+                    if (event.key.control) {
+                        // Ctrl + R - очистить сетку
+                        for (int i = 0; i < NoteNumber * 9; i++) {
+                            for (int j = 0; j < 32; j++) {
+                                isNoteSet[i][j] = false;
+                            }
+                        }
+                    }
+                    break;
                 }
                 break;
 
@@ -200,14 +315,44 @@ int main() {
                     )
 
                     // Количество подписей нот на экране
-                    int labelsOnScreen = (height / (charSize + 2)) + 1;
+                    // int labelsOnScreen = (height / (charSize + 2)) + 1;
                     // Какую ноту относительно низа экрана мы нажимаем?
-                    int clickedIndex = (height - event.mouseButton.y) / (charSize + 2) - 1;
-                    if (clickedIndex >= 0) {
-                        int ablsoluteIndex = clickedIndex + verticalOffset;
+                    int noteClickedIndex = (height - event.mouseButton.y) / (charSize + 2) - 1;
+                    // -1 если мы попали на нижнюю строчку с горизонтальным скролом
+                    if (noteClickedIndex >= 0) {
+                        int noteAblsoluteIndex = noteClickedIndex + verticalOffset;
                         // Какая это нота?
-                        D(std::cout << notes_flats[ablsoluteIndex % NoteNumber] << ablsoluteIndex / NoteNumber << '\n');
+                        D(std::cout << notes_flats[noteAblsoluteIndex % NoteNumber] << noteAblsoluteIndex / NoteNumber << '\n');
+                        // previewSound.setPitch(std::pow(twelvesRootOf2, ablsoluteIndex - NoteNumber * 2));
+
+                        // Если мы нажали на названия нот
+                        if (event.mouseButton.x < 2 * charSize) {
+                            // previewSound.play();
+                            createSound(&pianoBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - NoteNumber * 2));
+                        }
+                        // Если мы нажали на рабочую поверхность
+                        else if (event.mouseButton.x < (width - VerticalScrollWidth)) {
+                            // int rowsOnScreen = (width - (2 * charSize)) / noteWidth;
+                            int cellClickedIndex = (event.mouseButton.x - 2 * charSize) / noteWidth;
+                            int cellAbsoluteIndex = cellClickedIndex + horizontalOffset;
+                            D(std::cout << cellAbsoluteIndex << '\n');
+
+                            isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex] = !isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex];
+                        }
                     }
+                }
+                break;
+
+            case sf::Event::MouseButtonReleased:
+                if (event.mouseButton.button == sf::Mouse::Left) {
+                    /*if (previewSound.Playing) {
+                        for (int i = 100; i >= 0; i--) {
+                            previewSound.setVolume(i);
+                            std::this_thread::sleep_for(5ms);
+                        }
+                        previewSound.stop();
+                        previewSound.setVolume(100);
+                    }*/
                 }
                 break;
 
@@ -224,10 +369,12 @@ int main() {
                     D(std::cout << "Delta: " << event.mouseWheelScroll.delta << '\n');*/
 
                     if (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl)) {
-                        horizontalScrollX += event.mouseWheelScroll.delta;
+                        horizontalOffset += event.mouseWheelScroll.delta;
 
-                        if (horizontalScrollX < 0) horizontalScrollX = 0;
-                        if (horizontalScrollX > width) horizontalScrollX = width;
+                        if (horizontalOffset < 0) horizontalOffset = 0;
+                        // Допускаем только 8 тактов на экране за проект
+                        int notesOnScreen = (width - (2 * charSize)) / noteWidth;
+                        if (horizontalOffset > 32 - notesOnScreen) horizontalOffset = 32 - notesOnScreen;
                     }
                     else {
                         verticalOffset += event.mouseWheelScroll.delta;
@@ -236,7 +383,7 @@ int main() {
                         // Учитываем пробел в два пикселя
                         int labelN = (height / (charSize + 2)) + 1;
                         // D(std::cout << labelN << '\n');
-                        if (verticalOffset + labelN > NoteNumber * 10) verticalOffset = NoteNumber * 10 - labelN;
+                        if (verticalOffset + labelN > NoteNumber * 10 + 1) verticalOffset = NoteNumber * 10 + 1 - labelN;
                     }
                 }
                 break;
@@ -249,10 +396,21 @@ int main() {
         // if (sf::Keyboard::isKeyPressed(sf::Keyboard::Z)) {
         //     D(std::cout << "Playing Z");
         // }
+
+        pMouseIsPressed = mouseIsPressed;
+        if (sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
+            // Если мы нажали на названия нот
+            /*if (mouseX < 2 * charSize) {
+                piano.play();
+            }*/
+            mouseIsPressed = true;
+        }
     }
 
-    // Убеждаемся, что поток отрисовки тоже завершился перед завершением программы
+    programIsShuttingDown = true;
+    // Убеждаемся, что потоки тоже завершились перед завершением программы
     drawingThread.join();
+    soundManagmentThread.join();
 
     return 0;
 }
