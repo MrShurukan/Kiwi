@@ -2,6 +2,7 @@
 #include <SFML/Audio.hpp>
 #include <SFML/Network.hpp>
 #include <math.h>
+#include <fstream>
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -58,7 +59,7 @@ std::string notes_flats[NoteNumber] = {
 
 // Поставлена ли нота в этом месте сетки?
 // 10 октав
-bool isNoteSet[NoteNumber * 10][32];
+std::atomic<bool> isNoteSet[NoteNumber * 10][32];
 
 // Размер символов слева в пикселях
 const int charSize = 24;
@@ -71,19 +72,71 @@ double mapRanges(double value, double input_start, double input_end, double outp
     return (value - input_start) * (output_end - output_start) / (input_end - input_start) + output_start;
 }
 
-std::vector<std::thread*> soundThreads;
+// std::vector<std::thread*> soundThreads;
 
-void createSound(sf::SoundBuffer* buffer, double pitch = 1) {
-    std::thread* soundThread = new std::thread([buffer, pitch]() {
-        sf::Sound* sound = new sf::Sound(*buffer);
-        sound->setPitch(pitch);
+void createSound(sf::SoundBuffer& buffer, double pitch = 1) {
+    std::thread soundThread([buffer, pitch]() {
+        sf::Sound sound(buffer);
+        sound.setPitch(pitch);
 
-        sound->play();
-        while (sound->getStatus() == sf::Sound::Playing);
-        delete sound;
+        sound.play();
+        // while (sound->getStatus() == sf::Sound::Playing);
+        std::this_thread::sleep_for(200ms);
+
+        if (sound.getStatus() == sf::Sound::Playing) {
+            for (int i = 100; i >= 0; i--) {
+                sound.setVolume(i);
+                std::this_thread::sleep_for(5ms);
+            }
+            sound.stop();
+        }
     });
 
-    soundThreads.push_back(soundThread);
+    soundThread.detach();
+
+    // soundThreads.push_back(soundThread);
+    //D(std::cout << "SoundThread size: " << soundThreads.size() << '\n');
+}
+
+std::chrono::milliseconds tempoToMs(int tempo) {
+    return std::chrono::milliseconds(60000 / (tempo));
+}
+
+// В режиме проигрывания ли сейчас студия?
+std::atomic<bool> isPlaying;
+int currentPlayPosition = 0;
+
+// Fix Current Play Position
+void fixCPP() {
+    if (currentPlayPosition < 0) currentPlayPosition = 0;
+    else if (currentPlayPosition >= 32) currentPlayPosition = 31;
+}
+
+// Текущий темп в BPM
+int tempo = 160;
+auto playDelay = tempoToMs(tempo);
+
+/*void play() {
+    isPlaying = true;
+    while (isPlaying) {
+        std::this_thread::sleep_for(playDelay);
+        currentPlayPosition++;
+        if (currentPlayPosition > 32) currentPlayPosition = 0;
+        D(std::cout << "currentPlayPosition: " << currentPlayPosition << '\n');
+    }
+}*/
+
+void play() {
+    isPlaying = true;
+}
+
+void pause() {
+    isPlaying = false;
+}
+
+void stop() {
+    isPlaying = false;
+    currentPlayPosition = 0;
 }
 
 void draw(sf::RenderWindow* window) {
@@ -112,6 +165,9 @@ void draw(sf::RenderWindow* window) {
         sf::RectangleShape noteColoring(sf::Vector2f(2*charSize, charSize));
         sf::RectangleShape cellFilling(sf::Vector2f(noteWidth, charSize + 2));
         cellFilling.setFillColor(sf::Color(100, 200, 100));
+
+        sf::RectangleShape playMarker(sf::Vector2f(2, height - charSize + 2));
+        playMarker.setFillColor(sf::Color::White);
             
         for (int i = 0; i < labelAmount; i++) {
             int noteIndex = i + verticalOffset;
@@ -198,6 +254,10 @@ void draw(sf::RenderWindow* window) {
         scrollHandle.setPosition(horizontalScrollX, height - scrollHandle.getSize().y);
         window->draw(scrollHandle);
 
+        // Рисуем маркер проигрывания
+        playMarker.setPosition((currentPlayPosition - horizontalOffset) * noteWidth + noteWidth / 2 + 2 * charSize, 0);
+        window->draw(playMarker);
+
         // Конец кадра
         window->display();
     }
@@ -214,7 +274,7 @@ int main() {
     D(std::cout << "Kiwi v0.1 (c) IZ\n");
 
     // На отдельном потоке обрабатываем активные звуки
-    std::thread soundManagmentThread([] {
+    /*std::thread soundManagmentThread([] {
         while (!programIsShuttingDown) {
             for (int i = soundThreads.size() - 1; i >= 0; i--) {
                 soundThreads[i]->join();
@@ -222,10 +282,32 @@ int main() {
                 soundThreads.erase(soundThreads.begin() + i);
             }
         }
-    });
-    
+    });*/
+
     sf::SoundBuffer pianoBuffer; pianoBuffer.loadFromFile("piano_c4.wav");
     sf::Sound previewSound(pianoBuffer);
+
+    // Выделяем поток для обработки задержки между проигрыванием
+    std::thread playThread([&pianoBuffer]() {
+        while (!programIsShuttingDown) {
+            while (!isPlaying);
+
+            // Сыграть все звуки в данной колонке
+            for (int i = 0; i < NoteNumber * 10; i++) {
+                if (isNoteSet[i][currentPlayPosition])
+                    createSound(pianoBuffer, std::pow(twelvesRootOf2, i - NoteNumber * 2));
+            }
+
+            std::this_thread::sleep_for(playDelay);
+
+            if (!isPlaying) continue;
+
+            currentPlayPosition++;
+            if (currentPlayPosition >= 32) currentPlayPosition = 0;
+            D(std::cout << "currentPlayPosition: " << currentPlayPosition << '\n');
+        }
+    });;
+   
 
     if (!mainFont.loadFromFile("BalooBhaina2-Regular.ttf")) {
         D(std::cout << "Couldn't load font\n");
@@ -302,6 +384,54 @@ int main() {
                         }
                     }
                     break;
+
+                case sf::Keyboard::S:
+                    if (event.key.control) {
+                        // Ctrl + S - сохранить
+                        D(std::cout << "Saving...\n");
+                    }
+                    break;
+
+                case sf::Keyboard::O:
+                    if (event.key.control) {
+                        // Ctrl + O - открыть
+                        D(std::cout << "Opening...\n");
+                    }
+                    break;
+
+                case sf::Keyboard::Left:
+                    currentPlayPosition--;
+                    fixCPP();
+                    break;
+
+                case sf::Keyboard::Right:
+                    currentPlayPosition++;
+                    fixCPP();
+                    break;
+
+                case sf::Keyboard::Up:
+                    currentPlayPosition += 4;
+                    fixCPP();
+                    break;
+
+                case sf::Keyboard::Down:
+                    currentPlayPosition -= 4;
+                    fixCPP();
+                    break;
+
+                case sf::Keyboard::Space:
+                    if (!event.key.control) {
+                        if (!isPlaying) {
+                            play();
+                        }
+                        else {
+                            pause();
+                        }
+                    }
+                    else {
+                        stop();
+                    }
+                    break;
                 }
                 break;
 
@@ -328,7 +458,7 @@ int main() {
                         // Если мы нажали на названия нот
                         if (event.mouseButton.x < 2 * charSize) {
                             // previewSound.play();
-                            createSound(&pianoBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - NoteNumber * 2));
+                            createSound(pianoBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - NoteNumber * 2));
                         }
                         // Если мы нажали на рабочую поверхность
                         else if (event.mouseButton.x < (width - VerticalScrollWidth)) {
@@ -338,6 +468,9 @@ int main() {
                             D(std::cout << cellAbsoluteIndex << '\n');
 
                             isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex] = !isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex];
+                            // Сыграть превью, если ноту поставили
+                            if (isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex])
+                                createSound(pianoBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - NoteNumber * 2));
                         }
                     }
                 }
@@ -410,7 +543,9 @@ int main() {
     programIsShuttingDown = true;
     // Убеждаемся, что потоки тоже завершились перед завершением программы
     drawingThread.join();
-    soundManagmentThread.join();
+    //soundManagmentThread.join();
+    stop();
+    playThread.join();
 
     return 0;
 }
