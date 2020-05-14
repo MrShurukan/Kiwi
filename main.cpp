@@ -1,6 +1,7 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Audio.hpp>
 #include <SFML/Network.hpp>
+#include <iostream>
 #include <math.h>
 #include <fstream>
 #include <thread>
@@ -10,7 +11,6 @@
 using namespace std::chrono_literals;
 
 #ifdef DEBUG
-#include <iostream>
 #define D(x) x
 #else
 #define D(x) ;
@@ -28,10 +28,11 @@ const double twelvesRootOf2 = std::pow(2, 1.0 / 12);
 bool mouseIsPressed = false;
 bool pMouseIsPressed = false;
 
+// Количество нот в октаве
 #define NoteNumber 12
 
 // Как много мы проскролили наверх (в нотах)
-int verticalOffset = NoteNumber * 2; // Сразу скроллим piano roll на две октавы наверх
+int verticalOffset = NoteNumber * 4; // Сразу скроллим piano roll на четыре октавы наверх
 // Как много мы проскролили вправо
 int horizontalOffset = 0;
 
@@ -113,7 +114,7 @@ void fixCPP() {
 }
 
 // Текущий темп в BPM
-int tempo = 160;
+int tempo = 120;
 auto playDelay = tempoToMs(tempo);
 
 /*void play() {
@@ -189,15 +190,19 @@ void draw(sf::RenderWindow* window) {
             window->draw(noteColoring);
 
             // Пишем название ноты и соответсвующую октаву
-            noteLabel.setString(notes_array[arrayIndex] + std::to_string(noteIndex/NoteNumber));
+            std::string string = notes_array[arrayIndex] + std::to_string(noteIndex / NoteNumber);
+            noteLabel.setString(string);
             noteLabel.setPosition(0, height - (i+2) * (charSize + 2) - 5);
             window->draw(noteLabel);
 
             // Рисуем все видимые ноты на этой строчке
             for (int i = 0 + horizontalOffset; i < notesOnScreenHor + horizontalOffset; i++) {
                 if (isNoteSet[noteIndex][i]) {
-                    cellFilling.setPosition(noteWidth * (i - horizontalOffset) + (2 * charSize), vertPos);
+                    int x = noteWidth * (i - horizontalOffset) + (2 * charSize);
+                    cellFilling.setPosition(x, vertPos);
+                    noteLabel.setPosition(x + (string.size() == 2 ? 22 : 15), vertPos - 1);
                     window->draw(cellFilling);
+                    window->draw(noteLabel);
                 }
             }
 
@@ -265,13 +270,133 @@ void draw(sf::RenderWindow* window) {
 
 void loadSound(sf::SoundBuffer& bf, std::string path) {
     if (!bf.loadFromFile(path)) {
-        D(std::cout << "Couldn't load sound from '" << path << "'\n");
+        std::cout << "Couldn't load sound from '" << path << "'\n";
         exit(1);
     }
 }
 
-int main() {
-    D(std::cout << "Kiwi v0.1 (c) IZ\n");
+int noteToPitch(std::string notename) {
+    std::string noteLetter;
+    if (notename.size() == 2) noteLetter = notename.substr(0, 1);
+    else noteLetter = notename.substr(0, 2);
+
+    int noteIndex = -1;
+    for (int i = 0; i < NoteNumber; i++) {
+        if (notes_sharps[i] == noteLetter) {
+            noteIndex = i;
+            break;
+        }
+    }
+
+    if (noteIndex == -1) return -1;
+    char noteNumber = notename[notename.size() - 1];
+    if (noteNumber < '0' && noteNumber > '9') return -1;
+    std::cout << noteIndex << " " << noteNumber << " " << (noteNumber - '0') << '\n';
+
+    return 12 * (noteNumber - '0') + noteIndex;
+}
+
+std::string loadedFileName = "null";
+std::string loadedInstrumentName = "piano_c4.wav";
+int defaultInstrumentPitch = NoteNumber * 5;
+
+int main(int argc, char** argv) {
+    std::cout << "Kiwi v0.1 (c) IZ\n";
+
+    sf::SoundBuffer instrumentBuffer; instrumentBuffer.loadFromFile(loadedInstrumentName);
+
+    if (argc > 1) {
+        if (strcmp(argv[1], "--uploadingMode") == 0 || strcmp(argv[1], "-u") == 0) {
+            char choice;
+            std::cout << "Welcome to uploading mode!\n";
+            while (true) {
+                std::cout << "1 - upload .wav as an intrument\n2 - upload .kiwi to share with friends\n";
+                std::cin >> choice;
+                
+            }
+        }
+        if (strcmp(argv[1], "--downloadingMode") == 0 || strcmp(argv[1], "-d") == 0) {
+            char choice;
+            std::cout << "Welcome to downloading mode!\n";  
+            while (true) {
+                std::cout << "1 - download a new instrument\n2 - upload .kiwi to share with friends\n";
+                std::cin >> choice;
+            }
+        }
+        else {
+            for (int i = 1; i < argc; i++) {
+                if (strcmp(argv[i], "-f") == 0) {
+                    std::cout << "File argument is provided\n";
+                    if (i + 1 >= argc) {
+                        std::cout << "Usage: Kiwi.exe -f *filename*\n";
+                        exit(1);
+                    }
+                    std::ifstream saveFile(argv[i+1]);
+                    if (!saveFile) {
+                        std::cout << "Couldn't open selected file.\n";
+                        exit(1);
+                    }
+                    saveFile.read((char*)isNoteSet, sizeof(std::atomic<bool>[NoteNumber * 10][32]));
+                    loadedFileName = argv[1];
+                    std::cout << "Loaded selected file\n\n";
+                }
+                else if (strcmp(argv[i], "-i") == 0) {
+                    std::cout << "Instrument replacement is provided\n";
+                    if (i + 1 >= argc) {
+                        std::cout << "Usage: Kiwi.exe -i *filename*\n";
+                        exit(1);
+                    }
+                    std::string name = argv[i + 1];
+                    if (!instrumentBuffer.loadFromFile(name)) {
+                        std::cout << "Couldn't load instrument from file.\n";
+                        exit(1);
+                    }
+                    std::cout << "Loaded selected instrument\n";
+                    name = name.substr(0, name.find_last_of("."));
+                    std::cout << "Looking for " << name << ".default\n";
+                    std::ifstream defaultFile(name + ".default");
+                    if (!defaultFile) {
+                        std::cout << "Coudln't open (using C4 unless -n is provided)\n\n";
+                    }
+                    else {
+                        std::string note;
+                        defaultFile >> note;
+                        int pitch = noteToPitch(note);
+                        if (pitch == -1) {
+                            std::cout << "Note doesn't seem to be correctly formatted (are you using sharps?)\n";
+                            exit(1);
+                        }
+                        defaultInstrumentPitch = pitch;
+                    }
+                    defaultFile.close();
+                }
+                else if (strcmp(argv[i], "-n") == 0) {
+                    std::cout << "Changing default instrument tone\n";
+                    if (i + 1 >= argc) {
+                        std::cout << "Usage: Kiwi.exe -n *NOTE*\n(Examples: -t C4; -t A#6)\n";
+                    }
+                    int pitch = noteToPitch(argv[i+1]);
+                    if (pitch == -1) {
+                        std::cout << "Note doesn't seem to be correctly formatted (are you using sharps?)\n";
+                        exit(1);
+                    }
+                    std::cout << "Changed default intrument note to " << argv[i + 1] << " (" << pitch << ")\n\n";
+                    defaultInstrumentPitch = pitch;
+                }
+                else if (strcmp(argv[i], "-t") == 0) {
+                    std::cout << "Changing default tempo\n";
+                    if (i + 1 >= argc) {
+                        std::cout << "Usage: Kiwi.exe -t *BPM*\n";
+                        exit(1);
+                    }
+                    tempo = std::stoi(argv[i + 1]);
+                    playDelay = tempoToMs(tempo);
+                    std::cout << "Changed default tempo to " << tempo << "\n\n";
+                }
+                
+            }
+        }
+    }
 
     // На отдельном потоке обрабатываем активные звуки
     /*std::thread soundManagmentThread([] {
@@ -284,18 +409,15 @@ int main() {
         }
     });*/
 
-    sf::SoundBuffer pianoBuffer; pianoBuffer.loadFromFile("piano_c4.wav");
-    sf::Sound previewSound(pianoBuffer);
-
     // Выделяем поток для обработки задержки между проигрыванием
-    std::thread playThread([&pianoBuffer]() {
+    std::thread playThread([&instrumentBuffer]() {
         while (!programIsShuttingDown) {
             while (!isPlaying);
 
             // Сыграть все звуки в данной колонке
             for (int i = 0; i < NoteNumber * 10; i++) {
                 if (isNoteSet[i][currentPlayPosition])
-                    createSound(pianoBuffer, std::pow(twelvesRootOf2, i - NoteNumber * 2));
+                    createSound(instrumentBuffer, std::pow(twelvesRootOf2, i - defaultInstrumentPitch));
             }
 
             std::this_thread::sleep_for(playDelay);
@@ -306,11 +428,11 @@ int main() {
             if (currentPlayPosition >= 32) currentPlayPosition = 0;
             D(std::cout << "currentPlayPosition: " << currentPlayPosition << '\n');
         }
-    });;
+    });
    
 
     if (!mainFont.loadFromFile("BalooBhaina2-Regular.ttf")) {
-        D(std::cout << "Couldn't load font\n");
+        std::cout << "Couldn't load font (BalooBhaina2-Regular.ttf). Are you sure it's in your directory?\n";
         exit(1);
     }
     
@@ -350,7 +472,7 @@ int main() {
                 break;
             }
 
-            case sf::Event::Resized: {
+            /*case sf::Event::Resized: {
                 D(std::cout << "New Width: " << event.size.width << '\n';
                 std::cout << "New Height: " << event.size.height << '\n');
 
@@ -362,7 +484,7 @@ int main() {
                 window.setView(sf::View(visibleArea));
 
                 break;
-            }
+            }*/
 
             case sf::Event::KeyPressed:
                 switch(event.key.code) {
@@ -389,13 +511,29 @@ int main() {
                     if (event.key.control) {
                         // Ctrl + S - сохранить
                         D(std::cout << "Saving...\n");
+                        std::string saveName = "save" + std::to_string(std::time(nullptr)) + ".kiwi";
+                        D(std::cout << "Writing to " << saveName << "\n(last_save.kiwi was overwritten)\n");
+                        std::ofstream saveFile(saveName);
+                        saveFile.write((char*)isNoteSet, sizeof(std::atomic<bool>[NoteNumber * 10][32]));
+                        saveFile.close();
+                        system("del last_save.kiwi");
+                        system(("copy "+saveName+" last_save.kiwi /y").c_str());
                     }
                     break;
 
                 case sf::Keyboard::O:
                     if (event.key.control) {
                         // Ctrl + O - открыть
-                        D(std::cout << "Opening...\n");
+                        std::cout << "Opening...\n";
+                        std::ifstream saveFile("last_save.kiwi");
+                        if (saveFile) {
+                            std::cout << "Done!\n";
+                            saveFile.read((char*)isNoteSet, sizeof(std::atomic<bool>[NoteNumber * 10][32]));
+                            loadedFileName = "last_save.kiwi";
+                        }
+                        else {
+                            std::cout << "Couldn't open file.\n";
+                        }
                     }
                     break;
 
@@ -458,7 +596,7 @@ int main() {
                         // Если мы нажали на названия нот
                         if (event.mouseButton.x < 2 * charSize) {
                             // previewSound.play();
-                            createSound(pianoBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - NoteNumber * 2));
+                            createSound(instrumentBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - defaultInstrumentPitch));
                         }
                         // Если мы нажали на рабочую поверхность
                         else if (event.mouseButton.x < (width - VerticalScrollWidth)) {
@@ -468,9 +606,9 @@ int main() {
                             D(std::cout << cellAbsoluteIndex << '\n');
 
                             isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex] = !isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex];
-                            // Сыграть превью, если ноту поставили
-                            if (isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex])
-                                createSound(pianoBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - NoteNumber * 2));
+                            // Сыграть превью, если ноту поставили (если не проигрываем)
+                            if (isNoteSet[noteAblsoluteIndex][cellAbsoluteIndex] && !isPlaying)
+                                createSound(instrumentBuffer, std::pow(twelvesRootOf2, noteAblsoluteIndex - defaultInstrumentPitch));
                         }
                     }
                 }
