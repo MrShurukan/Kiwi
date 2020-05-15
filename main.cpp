@@ -300,8 +300,24 @@ std::string loadedFileName = "null";
 std::string loadedInstrumentName = "piano_c4.wav";
 int defaultInstrumentPitch = NoteNumber * 5;
 
+void sendFile(std::ifstream& file, sf::TcpSocket& socket) {
+    file.seekg(0, std::ios::beg);
+    char Buffer[1024];
+    while (file.read(Buffer, sizeof(Buffer)))
+    {
+        socket.send(Buffer, sizeof(Buffer));
+    }
+    // Отправляем то, что меньше 1024
+    socket.send(Buffer, file.gcount());
+
+    socket.send("\xFF\xFF\xFF", 3);
+}
+
+const std::string ip = "localhost";
+const unsigned short port = 8888;
+
 int main(int argc, char** argv) {
-    std::cout << "Kiwi v0.1 (c) IZ\n";
+    std::cout << "Kiwi v1.0-beta (c) IZ\n";
 
     sf::SoundBuffer instrumentBuffer; instrumentBuffer.loadFromFile(loadedInstrumentName);
 
@@ -309,18 +325,116 @@ int main(int argc, char** argv) {
         if (strcmp(argv[1], "--uploadingMode") == 0 || strcmp(argv[1], "-u") == 0) {
             char choice;
             std::cout << "Welcome to uploading mode!\n";
+            std::wcout << "Connecting to server.";
+            sf::TcpSocket socket;
+            while (socket.connect(ip, port) != sf::Socket::Done) {
+                std::cout << ".";
+                std::this_thread::sleep_for(1s);
+            }
+            std::cout << "\nSuccess!\n";
+            
             while (true) {
-                std::cout << "1 - upload .wav as an intrument\n2 - upload .kiwi to share with friends\n";
+                std::cout << "1 - upload .wav as an intrument; 2 - upload .kiwi to share with friends\nChoice: ";
                 std::cin >> choice;
-                
+                std::string fileName;
+                switch (choice) {
+                case '1':
+                    system("cls");
+                    std::cout << "(Here is a local directory sorted by .wav):\n";
+                    system("dir /B | find \".wav\"");
+                    std::cout << '\n';
+                    while (true) {
+                        std::cout << "Enter a path (full/relative) to a file (type 'break' to exit): ";
+                        std::cin >> fileName;
+                        if (fileName == "break") break;
+                        // std::cout << fileName << '\n';
+
+                        std::ifstream file(fileName, std::ios::in | std::ios::binary | std::ios::ate);
+                        if (!file) {
+                            std::cout << "Couldn't read file correctly\n";
+                            continue;
+                        }
+
+                        sf::Packet packet;
+                        packet << "uploadWav" << fileName;
+                        socket.send(packet);
+
+                        sendFile(file, socket);
+                        packet.clear();
+                        socket.receive(packet);
+                        std::string response;
+                        packet >> response;
+                        
+                        if (response == "done") {
+                            std::cout << "Success!\n";
+                        }
+                        else {
+                            std::cout << "Something went wrong...\n";
+                        }
+
+                        break;
+                    }
+
+                    break;
+                    
+                case '2':
+                    system("cls");
+                    std::cout << "(Here is a local directory sorted by .kiwi):\n";
+                    system("dir /B | find \".kiwi\"");
+                    std::cout << '\n';
+                    while (true) {
+                        std::cout << "Enter a path (full/relative) to a file (type 'break' to exit): ";
+                        std::cin >> fileName;
+                        if (fileName == "break") break;
+                        //std::cout << fileName << '\n';
+
+                        std::ifstream file(fileName, std::ios::in | std::ios::binary | std::ios::ate);
+                        if (!file) {
+                            std::cout << "Couldn't read file correctly\n";
+                            continue;
+                        }
+
+                        sf::Packet packet;
+                        packet << "uploadKiwi";
+                        socket.send(packet);
+
+                        sendFile(file, socket);
+
+                        packet.clear();
+                        socket.receive(packet);
+                        std::string id;
+                        packet >> id;
+                        std::cout << "Upload complete, here is the ID of your file: " << id << '\n';
+                        std::cout << "(You should save this somewhere)\n";
+
+                        break;
+                    }
+
+                    break;
+
+                default:
+                    std::cout << "Incorrect option\n";
+                    break;
+                }
             }
         }
         if (strcmp(argv[1], "--downloadingMode") == 0 || strcmp(argv[1], "-d") == 0) {
             char choice;
             std::cout << "Welcome to downloading mode!\n";  
             while (true) {
-                std::cout << "1 - download a new instrument\n2 - upload .kiwi to share with friends\n";
+                std::cout << "1 - download a new instrument; 2 - enter a code to download .kiwi file\nChoice: ";
                 std::cin >> choice;
+                switch (choice) {
+                case '1':
+                    break;
+
+                case '2':
+                    break;
+
+                default:
+                    std::cout << "Incorrect option\n";
+                    break;
+                }
             }
         }
         else {
@@ -458,6 +572,8 @@ int main(int argc, char** argv) {
 
     // Для изменения курсора
     // sf::Cursor cursor;
+
+    bool once = true;
 
     // Пока окно открыто - работает основной поток
     while (window.isOpen())
